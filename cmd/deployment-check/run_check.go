@@ -17,12 +17,17 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+
+	nodeCheck "github.com/Comcast/kuberhealthy/v2/pkg/checks/external/nodeCheck"
 )
 
 // runDeploymentCheck sets up a deployment and applies it to the cluster.
 // Sets up a deployment and service and uses the client to deploy the test deployment and service.
 // Attempts to hit the service hostname endpoint, looking for a 200 and reports a success if able to retrieve a 200.
 func runDeploymentCheck() {
+
+	log.Infoln("Waiting for node to become ready before starting check.")
+	waitForNodeToJoin(ctx)
 
 	log.Infoln("Starting check.")
 
@@ -46,10 +51,11 @@ func runDeploymentCheck() {
 	case <-ctx.Done():
 		// If there is a cancellation interrupt signal.
 		log.Infoln("Canceling cleanup and shutting down from interrupt.")
+		reportErrorsToKuberhealthy([]string{"failed to perform pre-check cleanup within timeout"})
 		return
 	case <-cleanupTimeout:
 		// If the clean up took too long, exit.
-		reportErrorsToKuberhealthy([]string{"failed to clean up resources in time"})
+		reportErrorsToKuberhealthy([]string{"failed to perform pre-check cleanup within timeout"})
 		return
 	}
 
@@ -72,6 +78,7 @@ func runDeploymentCheck() {
 	case <-ctx.Done():
 		// If there is a cancellation interrupt signal.
 		log.Infoln("Cancelling check and shutting down due to interrupt.")
+		reportErrorsToKuberhealthy([]string{"failed to create deployment within timeout"})
 		return
 	case <-runTimeout:
 		// If creating a deployment took too long, exit.
@@ -104,10 +111,11 @@ func runDeploymentCheck() {
 	case <-ctx.Done():
 		// If there is a cancellation interrupt signal, exit.
 		log.Infoln("Cancelling check and shutting down due to interrupt.")
+		reportErrorsToKuberhealthy([]string{"failed to create service within timeout"})
 		return
 	case <-runTimeout:
 		// If creating a service took too long, exit.
-		reportErrorsToKuberhealthy([]string{"failed to create deployment within timeout"})
+		reportErrorsToKuberhealthy([]string{"failed to create service within timeout"})
 		return
 	}
 
@@ -115,9 +123,7 @@ func runDeploymentCheck() {
 	// hostname := getServiceLoadBalancerHostname()
 	ipAddress := getServiceClusterIP()
 	if len(ipAddress) == 0 {
-		// if len(hostname) == 0 {
 		// If the retrieved address is empty or nil, clean up and exit.
-		// log.Infoln("Cleaning up check and exiting because the load balancer hostname is nil.")
 		log.Infoln("Cleaning up check and exiting because the cluster IP is nil: ", ipAddress)
 		errorReport := []string{} // Make a slice for errors here, because there can be more than 1 error.
 		// Clean up the check. A deployment was brought up, but no ingress was created.
@@ -155,10 +161,11 @@ func runDeploymentCheck() {
 	case <-ctx.Done():
 		// If there is a cancellation interrupt signal, exit.
 		log.Infoln("Cancelling check and shutting down due to interrupt.")
+		reportErrorsToKuberhealthy([]string{"failed to make http request to the deployment service cluster IP at " + ipAddress + " within timeout"})
 		return
 	case <-runTimeout:
 		// If requests to the hostname endpoint for a status code of 200 took too long, exit.
-		reportErrorsToKuberhealthy([]string{"failed to create deployment within timeout"})
+		reportErrorsToKuberhealthy([]string{"failed to make http request to the deployment service cluster IP at " + ipAddress + " within timeout"})
 		return
 	}
 
@@ -192,10 +199,11 @@ func runDeploymentCheck() {
 		case <-ctx.Done():
 			// If there is a cancellation interrupt signal.
 			log.Infoln("Cancelling check and shutting down due to interrupt.")
+			reportErrorsToKuberhealthy([]string{"failed to update deployment " + deploymentResult.Deployment.Name + " within timeout"})
 			return
 		case <-runTimeout:
 			// If creating a deployment took too long, exit.
-			reportErrorsToKuberhealthy([]string{"failed to update deployment within timeout"})
+			reportErrorsToKuberhealthy([]string{"failed to update deployment " + deploymentResult.Deployment.Name + " within timeout"})
 			return
 		}
 
@@ -211,7 +219,7 @@ func runDeploymentCheck() {
 				if cleanUpError != nil {
 					errorReport = append(errorReport, cleanUpError.Error())
 				}
-				reportErrorsToKuberhealthy([]string{err.Error()})
+				reportErrorsToKuberhealthy(errorReport)
 				return
 			}
 			// Continue with the check if there is no error.
@@ -219,17 +227,20 @@ func runDeploymentCheck() {
 		case <-ctx.Done():
 			// If there is a cancellation interrupt signal, exit.
 			log.Infoln("Cancelling check and shutting down due to interrupt.")
+			reportErrorsToKuberhealthy([]string{"failed to make http request to the deployment service cluster IP at " + ipAddress + " within timeout"})
 			return
 		case <-runTimeout:
 			// If requests to the hostname endpoint for a status code of 200 took too long, exit.
-			reportErrorsToKuberhealthy([]string{"failed to create deployment within timeout"})
+			reportErrorsToKuberhealthy([]string{"failed to make http request to the deployment service cluster IP at " + ipAddress + " within timeout"})
 			return
 		}
 	}
 
 	// Clean up!
-	cleanUp(ctx)
-
+	cleanUpError := cleanUp(ctx)
+	if cleanUpError != nil {
+		reportErrorsToKuberhealthy([]string{cleanUpError.Error()})
+	}
 	// Report to Kuberhealthy.
 	reportOKToKuberhealthy()
 }
@@ -308,4 +319,20 @@ func cleanUpOrphanedResources(ctx context.Context) chan error {
 	}(ctx)
 
 	return cleanUpChan
+}
+
+// waitForNodeToJoin waits for the node to join the worker pool.
+// Waits for kube-proxy to be ready and that Kuberhealthy is reachable.
+func waitForNodeToJoin(ctx context.Context) {
+	// Wait for node to be at least 2m old.
+	err := nodeCheck.WaitForNodeAge(ctx, client, checkNamespace, time.Minute*2)
+	if err != nil {
+		log.Errorln("Failed to check node age:", err.Error())
+	}
+
+	// Check if Kuberhealthy is reachable.
+	err = nodeCheck.WaitForKuberhealthy(ctx)
+	if err != nil {
+		log.Errorln("Failed to reach Kuberhealthy:", err.Error())
+	}
 }

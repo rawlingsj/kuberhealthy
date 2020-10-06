@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	"strconv"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ func createService(serviceConfig *corev1.Service) chan ServiceResult {
 
 		result := ServiceResult{}
 
-		service, err := client.CoreV1().Services(checkNamespace).Create(serviceConfig)
+		service, err := client.CoreV1().Services(checkNamespace).Create(context.TODO(), serviceConfig, metav1.CreateOptions{})
 		if err != nil {
 			log.Infoln("Failed to create a service in the cluster:", err)
 			result.Err = err
@@ -97,7 +98,7 @@ func createService(serviceConfig *corev1.Service) chan ServiceResult {
 			log.Infoln("Watching for service to exist.")
 
 			// Watch that it is up.
-			watch, err := client.CoreV1().Services(checkNamespace).Watch(metav1.ListOptions{
+			watch, err := client.CoreV1().Services(checkNamespace).Watch(context.TODO(), metav1.ListOptions{
 				Watch:         true,
 				FieldSelector: "metadata.name=" + service.Name,
 				// LabelSelector: defaultLabelKey + "=" + defaultLabelValueBase + strconv.Itoa(int(now.Unix())),
@@ -177,7 +178,7 @@ func deleteServiceAndWait(ctx context.Context) error {
 			time.Sleep(time.Second * 5)
 
 			// Watch that it is gone by listing repeatedly.
-			serviceList, err := client.CoreV1().Services(checkNamespace).List(metav1.ListOptions{
+			serviceList, err := client.CoreV1().Services(checkNamespace).List(context.TODO(), metav1.ListOptions{
 				FieldSelector: "metadata.name=" + checkServiceName,
 				// LabelSelector: defaultLabelKey + "=" + defaultLabelValueBase + strconv.Itoa(int(now.Unix())),
 			})
@@ -230,7 +231,7 @@ func deleteService() error {
 	}
 
 	// Delete the service and return the result.
-	return client.CoreV1().Services(checkNamespace).Delete(checkServiceName, &deleteOpts)
+	return client.CoreV1().Services(checkNamespace).Delete(context.TODO(), checkServiceName, deleteOpts)
 }
 
 // cleanUpOrphanedService cleans up services created from previous checks.
@@ -242,7 +243,7 @@ func cleanUpOrphanedService() error {
 		defer close(cleanUpChan)
 
 		// Watch that it is gone.
-		watch, err := client.CoreV1().Services(checkNamespace).Watch(metav1.ListOptions{
+		watch, err := client.CoreV1().Services(checkNamespace).Watch(context.TODO(), metav1.ListOptions{
 			Watch:         true,
 			FieldSelector: "metadata.name=" + checkServiceName,
 			// LabelSelector: defaultLabelKey + "=" + defaultLabelValueBase + strconv.Itoa(int(now.Unix())),
@@ -286,7 +287,7 @@ func cleanUpOrphanedService() error {
 	}
 
 	// Send the delete request.
-	err := client.CoreV1().Services(checkNamespace).Delete(checkServiceName, &deleteOpts)
+	err := client.CoreV1().Services(checkNamespace).Delete(context.TODO(), checkServiceName, deleteOpts)
 	if err != nil {
 		return errors.New("failed to delete previous service: " + err.Error())
 	}
@@ -300,7 +301,7 @@ func findPreviousService() (bool, error) {
 
 	log.Infoln("Attempting to find previously created service(s) belonging to this check.")
 
-	serviceList, err := client.CoreV1().Services(checkNamespace).List(metav1.ListOptions{})
+	serviceList, err := client.CoreV1().Services(checkNamespace).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Infoln("Error listing services:", err)
 		return false, err
@@ -346,7 +347,7 @@ func findPreviousService() (bool, error) {
 // getServiceLoadBalancerHostname retrieves the hostname for the load balancer utilized for the service.
 func getServiceLoadBalancerHostname() string {
 
-	svc, err := client.CoreV1().Services(checkNamespace).Get(checkServiceName, metav1.GetOptions{})
+	svc, err := client.CoreV1().Services(checkNamespace).Get(context.TODO(), checkServiceName, metav1.GetOptions{})
 	if err != nil {
 		log.Infoln("Error occurred attempting to list service while retrieving service hostname:", err)
 		return ""
@@ -363,7 +364,7 @@ func getServiceLoadBalancerHostname() string {
 // getServiceClusterIP retrieves the cluster IP address utilized for the service
 func getServiceClusterIP() string {
 
-	svc, err := client.CoreV1().Services(checkNamespace).Get(checkServiceName, metav1.GetOptions{})
+	svc, err := client.CoreV1().Services(checkNamespace).Get(context.TODO(), checkServiceName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorln("Error occurred attempting to list service while retrieving service cluster IP:", err)
 		return ""
@@ -390,10 +391,10 @@ func waitForServiceToDelete() chan bool {
 	go func() {
 		defer close(deleteChan)
 		for {
-			_, err := client.CoreV1().Services(checkNamespace).Get(checkServiceName, metav1.GetOptions{})
+			_, err := client.CoreV1().Services(checkNamespace).Get(context.TODO(), checkServiceName, metav1.GetOptions{})
 			if err != nil {
 				log.Debugln("error from Services().Get():", err.Error())
-				if strings.Contains(err.Error(), "not found") {
+				if k8sErrors.IsNotFound(err) || strings.Contains(err.Error(), "not found") {
 					log.Debugln("Service deleted.")
 					deleteChan <- true
 					return
@@ -429,7 +430,7 @@ func serviceHasClusterIP() chan *corev1.Service {
 		defer close(resultChan)
 
 		for {
-			svc, err := client.CoreV1().Services(checkNamespace).Get(checkServiceName, metav1.GetOptions{})
+			svc, err := client.CoreV1().Services(checkNamespace).Get(context.TODO(), checkServiceName, metav1.GetOptions{})
 			if err != nil {
 				time.Sleep(time.Second)
 				continue

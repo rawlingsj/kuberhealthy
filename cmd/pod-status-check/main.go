@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// KubeConfigFile is a variable containing file path of Kubernetes config files
 var KubeConfigFile = filepath.Join(os.Getenv("HOME"), ".kube", "config")
 var namespace string
 var skipDurationEnv string
@@ -69,7 +71,7 @@ func findPodsNotRunning(client *kubernetes.Clientset) ([]string, error) {
 
 	var failures []string
 
-	pods, err := client.CoreV1().Pods(namespace).List(metav1.ListOptions{LabelSelector: "app!=kuberhealthy-check,source!=kuberhealthy"})
+	pods, err := client.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: "app!=kuberhealthy-check,source!=kuberhealthy"})
 	if err != nil {
 		return failures, err
 	}

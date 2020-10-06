@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,12 +16,19 @@ import (
 	"github.com/Comcast/kuberhealthy/v2/pkg/kubeClient"
 )
 
+// kubeConfigFile is a variable containing file path of Kubernetes config files
 var kubeConfigFile = filepath.Join(os.Getenv("HOME"), ".kube", "config")
+
+// ReapCheckerPods is a variable mapping all reaper pods
 var ReapCheckerPods map[string]v1.Pod
+
+// MaxPodsThreshold is a variable limiting how many reaper pods can exist in a cluster
 var MaxPodsThreshold = 4
+
+// Namespace is a variable to allow code to target all namespaces or a single namespace
 var Namespace string
 
-func init(){
+func init() {
 	Namespace = os.Getenv("SINGLE_NAMESPACE")
 	if len(Namespace) == 0 {
 		log.Infoln("Single namespace not specified, running check reaper across all namespaces")
@@ -61,7 +69,7 @@ func listCheckerPods(client *kubernetes.Clientset, namespace string) (map[string
 
 	ReapCheckerPods = make(map[string]v1.Pod)
 
-	pods, err := client.CoreV1().Pods(namespace).List(metav1.ListOptions{LabelSelector: "kuberhealthy-check-name"})
+	pods, err := client.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: "kuberhealthy-check-name"})
 	if err != nil {
 		log.Errorln("Failed to list checker pods")
 		return ReapCheckerPods, err
@@ -70,7 +78,7 @@ func listCheckerPods(client *kubernetes.Clientset, namespace string) (map[string
 	log.Infoln("Found:", len(pods.Items), "checker pods")
 
 	for _, p := range pods.Items {
-		if p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
+		if p.Status.Phase == v1.PodSucceeded || p.Status.Phase == v1.PodFailed {
 			//log.Infoln("Checker pod: ", p.Name, "found in namespace: ", p.Namespace)
 			ReapCheckerPods[p.Name] = p
 		}
@@ -87,7 +95,7 @@ func deleteFilteredCheckerPods(client *kubernetes.Clientset, reapCheckerPods map
 	for k, v := range reapCheckerPods {
 
 		// Delete pods older than 5 hours and is in status Succeeded
-		if time.Now().Sub(v.CreationTimestamp.Time).Hours() > 5 && v.Status.Phase == "Succeeded" {
+		if time.Now().Sub(v.CreationTimestamp.Time).Hours() > 5 && v.Status.Phase == v1.PodSucceeded {
 			log.Infoln("Found pod older than 5 hours in status `Succeeded`. Deleting pod:", k)
 
 			err = deletePod(client, v)
@@ -99,7 +107,7 @@ func deleteFilteredCheckerPods(client *kubernetes.Clientset, reapCheckerPods map
 		}
 
 		// Delete failed pods (status Failed) older than 5 days (120 hours)
-		if time.Now().Sub(v.CreationTimestamp.Time).Hours() > 120 && v.Status.Phase == "Failed" {
+		if time.Now().Sub(v.CreationTimestamp.Time).Hours() > 120 && v.Status.Phase == v1.PodFailed {
 			log.Infoln("Found pod older than 5 days in status `Failed`. Deleting pod:", k)
 
 			err = deletePod(client, v)
@@ -120,22 +128,22 @@ func deleteFilteredCheckerPods(client *kubernetes.Clientset, reapCheckerPods map
 			successOldCount := 0
 			successCount := 0
 			for _, p := range allCheckPods {
-				if v.CreationTimestamp.Time.Before(p.CreationTimestamp.Time) && p.Status.Phase != "Succeeded" && v.Namespace == p.Namespace {
+				if v.CreationTimestamp.Time.Before(p.CreationTimestamp.Time) && p.Status.Phase != v1.PodSucceeded && v.Namespace == p.Namespace {
 					failOldCount++
 				}
-				if p.Status.Phase != "Succeeded" && v.Namespace == p.Namespace {
+				if p.Status.Phase != v1.PodSucceeded && v.Namespace == p.Namespace {
 					failCount++
 				}
-				if v.CreationTimestamp.Time.Before(p.CreationTimestamp.Time) && p.Status.Phase == "Succeeded" && v.Namespace == p.Namespace {
+				if v.CreationTimestamp.Time.Before(p.CreationTimestamp.Time) && p.Status.Phase == v1.PodSucceeded && v.Namespace == p.Namespace {
 					successOldCount++
 				}
-				if p.Status.Phase == "Succeeded" && v.Namespace == p.Namespace {
+				if p.Status.Phase == v1.PodSucceeded && v.Namespace == p.Namespace {
 					successCount++
 				}
 			}
 
 			// Delete if there are more than 5 checker pods with the same name in status Succeeded that were created more recently
-			if successOldCount > MaxPodsThreshold && successCount > MaxPodsThreshold {
+			if v.Status.Phase == v1.PodSucceeded && successOldCount > MaxPodsThreshold && successCount > MaxPodsThreshold {
 				log.Infoln("Found more than 5 checker pods with the same name in status `Succeeded` that were created more recently. Deleting pod:", k)
 
 				err = deletePod(client, v)
@@ -147,7 +155,7 @@ func deleteFilteredCheckerPods(client *kubernetes.Clientset, reapCheckerPods map
 			}
 
 			// Delete if the checker pod is Failed and there are more than 5 Failed checker pods of the same type which were created more recently
-			if v.Status.Phase == "Failed" && failOldCount > MaxPodsThreshold && failCount > MaxPodsThreshold {
+			if v.Status.Phase == v1.PodFailed && failOldCount > MaxPodsThreshold && failCount > MaxPodsThreshold {
 				log.Infoln("Found more than 5 `Failed` checker pods of the same type which were created more recently. Deleting pod:", k)
 
 				err = deletePod(client, v)
@@ -183,6 +191,6 @@ func deletePod(client *kubernetes.Clientset, pod v1.Pod) error {
 
 	log.Infoln("Deleting Pod: ", pod.Name, " in namespace: ", pod.Namespace)
 	propagationForeground := metav1.DeletePropagationForeground
-	options := &metav1.DeleteOptions{PropagationPolicy: &propagationForeground}
-	return client.CoreV1().Pods(pod.Namespace).Delete(pod.Name, options)
+	options := metav1.DeleteOptions{PropagationPolicy: &propagationForeground}
+	return client.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, options)
 }

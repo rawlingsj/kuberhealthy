@@ -54,10 +54,10 @@ func Client(GroupName string, GroupVersion string, kubeConfig string, namespace 
 	config.ContentConfig.GroupVersion = &schema.GroupVersion{Group: GroupName, Version: GroupVersion}
 	config.APIPath = "/apis"
 	// config.NegotiatedSerializer = serializer.NegotiatedSerializerWrapper(){CodecFactory: scheme.Codecs}
-	config.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: scheme.Codecs}
+	config.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
 	config.UserAgent = rest.DefaultKubernetesUserAgent()
 
 	// log.Println("creating khstate rest client")
 	client, err := rest.RESTClientFor(&config)
-	return &KuberhealthyStateClient{restClient: client, ns: namespace}, err
+	return &KuberhealthyStateClient{restClient: client}, err
 }

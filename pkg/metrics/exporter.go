@@ -14,6 +14,7 @@ package metrics // import "github.com/Comcast/kuberhealthy/v2/pkg/metrics"
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -44,7 +45,14 @@ func GenerateMetrics(state health.State) string {
 		if d.OK {
 			checkStatus = "1"
 		}
-		metricName := fmt.Sprintf("kuberhealthy_check{check=\"%s\",namespace=\"%s\",status=\"%s\"}", c, d.Namespace, checkStatus)
+		errors := ""
+		if len(d.Errors) > 0 {
+			for _, error := range d.Errors {
+				errors += fmt.Sprintf("%s|", error)
+			}
+		}
+		errors = strings.ReplaceAll(errors, "\"", "'")
+		metricName := fmt.Sprintf("kuberhealthy_check{check=\"%s\",namespace=\"%s\",status=\"%s\",error=\"%s\"}", c, d.Namespace, checkStatus, errors)
 		metricDurationName := fmt.Sprintf("kuberhealthy_check_duration_seconds{check=\"%s\",namespace=\"%s\"}", c, d.Namespace)
 		checkMetricState[metricName] = checkStatus
 		runDuration, err := time.ParseDuration(d.RunDuration)
